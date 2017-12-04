@@ -4,6 +4,8 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+import sys
+import argparse
 
 class PewCapital(PersonalCapital):
     """
@@ -12,11 +14,11 @@ class PewCapital(PersonalCapital):
     """
     def __init__(self):
         PersonalCapital.__init__(self)
-        self.__session_file = 'session.json'
+        self.__session_file = os.getenv('PEW_SESSION_FILE','session.json')
 
     def load_session(self):
         try:
-            with open(self.__session_file) as data_file:    
+            with open(self.__session_file) as data_file:
                 cookies = {}
                 try:
                     cookies = json.load(data_file)
@@ -34,7 +36,7 @@ def get_email():
     email = os.getenv('PEW_EMAIL')
     if not email:
         print('You can set the environment variables for PEW_EMAIL and PEW_PASSWORD so the prompts don\'t come up every time')
-        return raw_input('Enter email:')
+        return input('Enter email:')
     return email
 
 def get_password():
@@ -43,23 +45,37 @@ def get_password():
         return getpass.getpass('Enter password:')
     return password
 
+# Instantiate the parser
+parser = argparse.ArgumentParser(description='Optional app description')
+
+parser.add_argument('--year', action='store_true',
+                    help='Get a full year')
+
+parser.add_argument("--stdout", "-", action='store_true')
+
+
 def main():
     email, password = get_email(), get_password()
     pc = PewCapital()
     pc.load_session()
 
+    args = parser.parse_args()
+    year = args.year
+
     try:
         pc.login(email, password)
     except RequireTwoFactorException:
         pc.two_factor_challenge(TwoFactorVerificationModeEnum.SMS)
-        pc.two_factor_authenticate(TwoFactorVerificationModeEnum.SMS, raw_input('code: '))
+        pc.two_factor_authenticate(TwoFactorVerificationModeEnum.SMS, input('code: '))
         pc.authenticate_password(password)
 
-    accounts_response = pc.fetch('/newaccount/getAccounts')
-    
     now = datetime.now()
     date_format = '%Y-%m-%d'
-    days = 90
+    # get the last week's transactions, there will be overlap
+    days = 7
+    if year:
+        days = 365
+
     start_date = (now - (timedelta(days=days+1))).strftime(date_format)
     end_date = (now - (timedelta(days=1))).strftime(date_format)
     transactions_response = pc.fetch('/transaction/getUserTransactions', {
@@ -73,11 +89,14 @@ def main():
     })
     pc.save_session()
 
-    accounts = accounts_response.json()['spData']
-    print('Networth: {0}'.format(accounts['networth']))
+    output_dir = os.path.abspath(os.getenv('PEW_OUTPUT_DIR','./'))
 
-    transactions = transactions_response.json()['spData']
-    print('Number of transactions between {0} and {1}: {2}'.format(transactions['startDate'], transactions['endDate'], len(transactions['transactions'])))
+    if args.stdout:
+        sys.stdout.buffer.write(transactions_response.content)
+    else:
+        path = output_dir+"/transactions_"+end_date+"_"+start_date+".json"
+        with open (path, "wb") as f:
+            f.write(transactions_response.content)
 
 if __name__ == '__main__':
     main()
